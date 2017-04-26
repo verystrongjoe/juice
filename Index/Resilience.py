@@ -5,6 +5,8 @@ import requests
 import urllib
 import datetime, time
 from prettytable import PrettyTable
+import logging
+
 
 ## resilience 주식의 회복 탄력성을 계산해주는 로직
 class Resilience :
@@ -15,6 +17,7 @@ class Resilience :
     threshold_DroppedPersent = 5
     threshold_MaxDayToCountupRecoveryTime = 1000
 
+
     def main(self, code):
         prices = Resilience.getPricesFromWeb(self, code)
         dropPrices = Resilience.getDropBadlyList(self,prices)
@@ -24,9 +27,24 @@ class Resilience :
         dropPrices = Resilience.appendRelatedNewsOnDroppedDay(self,dropPrices,newsList)
         Resilience.printResultWithNews(self,dropPrices)
 
+
+    def getLastPageIdx(self, url, code):
+        source_code = requests.get(url, timeout=None)
+        soup = BeautifulSoup(source_code.text, 'lxml')
+        tableSoup = soup.find('table', attrs={'class', 'Nnavi'})
+        lastPageSoup = tableSoup.find('td', attrs={'class', 'pgRR'})
+
+        lastpageUrl = lastPageSoup.a['href'][lastPageSoup.a['href'].find("page=")+5:]
+        logging.debug('lastpageUrl is %s', lastpageUrl)
+        #print('lastpageUrl is %s', lastpageUrl)
+        return int(lastpageUrl)
+
     def getPricesFromWeb(self, code):
-        # last page 구하는 로직 구현
-        last_page_index = 50
+
+        # last page 구하는 로직
+        url = Resilience.domainUrl + code + str(Resilience.pageUrl) + "1"
+        last_page_index = Resilience.getLastPageIdx(self, url, code)
+
         list = []
 
         for page in range(1, last_page_index):
@@ -35,6 +53,7 @@ class Resilience :
             soup = BeautifulSoup(source_code.text, 'lxml')
             tableSoup = soup.find('table', attrs={'class', 'type2'})
             trSoup = tableSoup.find_all('tr')
+
             i = 0
             rowcount = 0;
 
@@ -157,12 +176,15 @@ class Resilience :
         td = tableSoup.find('td', attrs={'class','pgRR'}).a['href']
         last_page_index = int(td[td.index('page=') + 5:])
 
-        last_page_index = 300
+        #last_page_index = 300
+
+        # TODO : 여기에 이분탐색을 하는 로직이 들어가야함 왼쪽과 오른쪽 끝을 가르키는 포인터를 두고 계속 찾아갈수 있게 로직 필요. 왜냐. 너무 오래 걸림 ㅠㅠ
+
 
         news_list = []
 
-        # for page in range(1,last_page_index) :
-        for page in range(600, 900):
+        for page in range(1,last_page_index) :
+        # for page in range(600, 900):
             url = news_domain_with_pageNo + str(page)
             source_code = requests.get(url, timeout=None)
             soup = BeautifulSoup(source_code.text, 'lxml')
