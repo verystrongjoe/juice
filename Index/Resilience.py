@@ -1,28 +1,32 @@
 from bs4 import BeautifulSoup
 
-
 import requests
 import urllib
 import datetime, time
 from prettytable import PrettyTable
 import logging
 
+from Domain import Stock
 
 ## resilience 주식의 회복 탄력성을 계산해주는 로직
 class Resilience :
 
     # 1~ 513 페이지를 네비게이션하면서 1996년도에서 오늘까지의 일일 종가 데이터를 가져온다.
-    domainUrl = 'http://finance.naver.com/item/sise_day.nhn?code='
+    domainUrl = 'http://finance.naver.com/item/sise_day.nhn?'
     pageUrl = '&page='
+    codeUrl = "&code="
+
     threshold_DroppedPersent = 5
     threshold_MaxDayToCountupRecoveryTime = 1000
 
+    stock = Stock.Stock()
 
     def main(self, code):
         prices = Resilience.getPricesFromWeb(self, code)
         dropPrices = Resilience.getDropBadlyList(self,prices)
         dropPrices = Resilience.calculateDaysToBeRecovered(self,prices,dropPrices)
         Resilience.printRecoveryReport(self,dropPrices)
+
         newsList = Resilience.getNewsList(self,code)
         dropPrices = Resilience.appendRelatedNewsOnDroppedDay(self,dropPrices,newsList)
         Resilience.printResultWithNews(self,dropPrices)
@@ -37,18 +41,48 @@ class Resilience :
         lastpageUrl = lastPageSoup.a['href'][lastPageSoup.a['href'].find("page=")+5:]
         logging.debug('lastpageUrl is %s', lastpageUrl)
         #print('lastpageUrl is %s', lastpageUrl)
+
         return int(lastpageUrl)
+
+
+
+    def getFirstDateinPage(self, code, domainUrl, page):
+        domainUrl = Resilience.domainUrl + str(Resilience.codeUrl) + "code=" + code + str(Resilience.pageUrl) + page
+        source_code = requests.get(domainUrl, timeout=None)
+        soup = BeautifulSoup(source_code.text, 'lxml')
+        tableSoup = soup.find('table', attrs={'class', 'type2'})
+        trSoup = tableSoup.find_all('tr')
+
+        for tr in trSoup:
+            i = i + 1
+            if i > 2 and i < 16 and i <= len(tr):
+                if i == 8 or i == 9 or i == 10:
+                    continue
+                j = 0
+
+
+                for td in tr:
+
+                    j = j + 1
+                    if j == 2:
+                        date_str = str(td.span.text)
+                        date_str = date_str.replace(".", "")
+                        resultDate = datetime.date(int(date_str[0:4]), int(date_str[4:6]), int(date_str[6:8]))
+                        break
+            break
+        return resultDate
+
 
     def getPricesFromWeb(self, code):
 
         # last page 구하는 로직
-        url = Resilience.domainUrl + code + str(Resilience.pageUrl) + "1"
+        url = Resilience.domainUrl + Resilience.codeUrl + code + str(Resilience.pageUrl) + "1"
         last_page_index = Resilience.getLastPageIdx(self, url, code)
 
         list = []
 
         for page in range(1, last_page_index):
-            url = Resilience.domainUrl + code + str(Resilience.pageUrl) + str(page)
+            url = Resilience.domainUrl + Resilience.codeUrl +  code + str(Resilience.pageUrl) + str(page)
             source_code = requests.get(url, timeout=None)
             soup = BeautifulSoup(source_code.text, 'lxml')
             tableSoup = soup.find('table', attrs={'class', 'type2'})
@@ -72,6 +106,8 @@ class Resilience :
                             date_str = str(td.span.text)
                             date_str = date_str.replace(".", "")
                             dic['date'] = datetime.date(int(date_str[0:4]), int(date_str[4:6]), int(date_str[6:8]))
+
+                            Resilience.stock.set_basic_info_with_oneDate((dic['date']))
 
                         if j == 4:
                             price = str(td.span.text)
@@ -134,7 +170,7 @@ class Resilience :
                         break
                     else:
                         counting = counting + 1
-                        # print(day['date'],day['price'])
+                        # print(day['date'],day['price'])∂
 
             element['theDay'] = theDay
             element['counting'] = counting
@@ -166,10 +202,9 @@ class Resilience :
     def getNewsList(self, code):
 
         # 그다음 이시기에 어떤 뉴스가 있었는지를 찾기 위해서 네이버 증권의 뉴스데이터를 이용한다.
-        news_domain = 'http://finance.naver.com/item/news_news.nhn?code='+ code
-        news_domain_with_pageNo = 'http://finance.naver.com/item/news_news.nhn?code=' + code  + '&page='
+        news_domain_url = 'http://finance.naver.com/item/news_news.nhn?'
 
-        source_code = requests.get(news_domain, timeout=None)
+        source_code = requests.get(news_domain_url+Resilience.codeUrl+code, timeout=None)
         soup = BeautifulSoup(source_code.text,  'lxml')
 
         tableSoup = soup.find('table', attrs={'class', 'Nnavi'} )
@@ -179,13 +214,34 @@ class Resilience :
         #last_page_index = 300
 
         # TODO : 여기에 이분탐색을 하는 로직이 들어가야함 왼쪽과 오른쪽 끝을 가르키는 포인터를 두고 계속 찾아갈수 있게 로직 필요. 왜냐. 너무 오래 걸림 ㅠㅠ
+        """
+        1. get a total page number substracting the index of first page from index of last page
+        2. get a start date and a last date
+        3. get the period between the start date and the last date
+        4. divide a total page into the period
+        5. using the result of 4, we can estimate of the page Index having the news of the date
 
+
+        1. start = 1,  mid = pages / 2 , end = lastPageId
+        2. start ~ mid / mid ~ end
+        3.
+        """
 
         news_list = []
 
+        firstIdx = 1
+        midIdx = last_page_index / 2
+        endIdx = last_page_index
+
+        while True :
+            firstDate = Resilience.getFirstDateinPage(code, news_domain_url, firstIdx)
+            midDate = Resilience.getFirstDateinPage(code, news_domain_url, midIdx)
+            firstDate = Resilience.getFirstDateinPage(code, news_domain_url, endIdx)
+            break
+
         for page in range(1,last_page_index) :
         # for page in range(600, 900):
-            url = news_domain_with_pageNo + str(page)
+            url = news_domain_url + Resilience.pageUrl + str(page)
             source_code = requests.get(url, timeout=None)
             soup = BeautifulSoup(source_code.text, 'lxml')
 
